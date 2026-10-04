@@ -5,7 +5,7 @@ void DelayFx::prepare(double rate) {
     rate_ = rate;
     smooth_ = timeCoefficient(.02, rate);
     timeSmooth_ = timeCoefficient(.05, rate);
-    for (auto& l : line_) l.prepare(static_cast<size_t>(rate*1.12)+16);
+    for (auto& l : line_) l.prepare(static_cast<size_t>(rate*(maxMs*.001*1.02))+16);
     retarget();
     reset();
 }
@@ -19,14 +19,27 @@ void DelayFx::clearState() noexcept {
 void DelayFx::reset() noexcept {
     clearState();
     wowPhase_ = tapePhase_[0] = tapePhase_[1] = 0;
-    ms_ = std::clamp(target_.p1, 20., 1000.);
+    ms_ = timeMs();
     tone_ = toneGoal_;
 }
 
 void DelayFx::set(const BlockSettings& s, bool immediate) noexcept {
     target_ = s;
     retarget();
-    if (immediate) { ms_ = std::clamp(s.p1, 20., 1000.); tone_ = toneGoal_; }
+    if (immediate) { ms_ = timeMs(); tone_ = toneGoal_; }
+}
+
+// Free: the Time knob. Synced: the note value at the tempo, held between 20 ms and 4 s (a slow tempo with a long note
+// would not fit in the line, and a fast one with a short note is not a delay).
+double DelayFx::timeMs() const noexcept {
+    if (target_.sync == 0 || target_.sync >= syncCount) return std::clamp(target_.p1, 20., 1000.);
+    return std::clamp(syncBeats[target_.sync]*60000./tempo_, 20., maxMs);
+}
+
+void DelayFx::setTempo(double bpm) noexcept {
+    bpm = std::isfinite(bpm) ? std::clamp(bpm, 20., 999.) : 120.;
+    tempo_ = bpm;
+    if (!tempoSeen_) { tempoSeen_ = true; ms_ = timeMs(); }
 }
 
 // The tone knob is the cutoff of the filter in the feedback: the repeats lose their top as they fade, a tape's more so.
@@ -39,11 +52,11 @@ void DelayFx::retarget() noexcept {
 size_t DelayFx::tailSamples() const noexcept {
     const double fb = std::clamp(target_.p2, 0., 90.)*.01;
     const double repeats = fb < .01 ? 1. : std::min(60., std::ceil(std::log(.001)/std::log(fb)));
-    return static_cast<size_t>(std::min(10., std::clamp(target_.p1, 20., 1000.)*.001*repeats)*rate_);
+    return static_cast<size_t>(std::min(10., timeMs()*.001*repeats)*rate_);
 }
 
 Stereo DelayFx::process(Stereo in) noexcept {
-    follow(ms_, std::clamp(target_.p1, 20., 1000.), timeSmooth_);
+    follow(ms_, timeMs(), timeSmooth_);
     follow(tone_, toneGoal_, smooth_);
     const double d = std::max(3., ms_*rate_/1000.);
     const float fb = static_cast<float>(std::clamp(target_.p2, 0., 90.)*.01);

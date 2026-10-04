@@ -1,5 +1,5 @@
 // Renders the editor to a PNG without a plugin host, or smoke-tests its interactions headlessly.
-//   editor_snapshot out.png [filter.on=1 filter.flavor=bandpass drive.p1=70 delay.flavor=tape input=3 order=1 ...]
+//   editor_snapshot out.png [delay.sync=1/8. tempo=96 filter.on=1 filter.flavor=bandpass drive.p1=70 delay.flavor=tape input=3 order=1 ...]
 //   editor_snapshot --selftest
 // Keys are <block>.<on|flavor|p1|p2|p3|mix> (blocks: filter drive modulation delay reverb width) or input, output, mix,
 // bypass, order. Values are numbers or what the plugin shows ("1.5k", "fuzz", "8 bit", "3 s"). Status overrides: in out.
@@ -28,6 +28,7 @@ static int findParam(const std::string& name) {
     if (name == "bypass") return Bypass;
     if (name == "order") return FilterOrder;
     if (name == "autogain") return AutoGain;
+    if (name == "delay.sync") return DelaySync;
     const size_t dot = name.find('.');
     if (dot == std::string::npos) return -1;
     const std::string block = name.substr(0, dot), key = name.substr(dot+1);
@@ -63,6 +64,7 @@ static void click(NSWindow* window, NSView* view, NSPoint local, NSInteger click
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
 static void refresh(NSView* root) { [root performSelector:NSSelectorFromString(@"refresh")]; }
+static id call(id target, SEL selector, id argument = nil) { return [target performSelector:selector withObject:argument]; }
 static void type(NSView* knob, NSTextField* field) { [knob performSelector:NSSelectorFromString(@"typed:") withObject:field]; }
 #pragma clang diagnostic pop
 
@@ -145,6 +147,33 @@ static int selftest(NSView* root, NSWindow* window) {
     EXPECT(values[blockParam(FilterBlock, P3)] == 1);
     click(window, slope, NSMakePoint(slope.bounds.size.width*.25, 13));
     EXPECT(values[blockParam(FilterBlock, P3)] == 0);
+    // Delay sync: the menu offers Free and every note value; choosing one is a complete gesture, dims the Time knob and
+    // shows the time the note comes to at the host's tempo (120 until it says), and Free gives the knob back.
+    NSView* sync = find(panels[DelayBlock], @"FXMenuField")[0];
+    NSMenu* menu = call(sync, NSSelectorFromString(@"buildMenu"));
+    EXPECT(menu.itemArray.count == syncCount);
+    for (NSUInteger i = 0; i < syncCount; ++i) EXPECT([menu.itemArray[i].title isEqualToString:[NSString stringWithUTF8String:syncNames[i]]]);
+    NSView* timeKnob = find(panels[DelayBlock], @"FXKnob")[0];
+    EXPECT(timeKnob.alphaValue == 1);
+    const int syncBegins = gestureBegins;
+    NSMenuItem* eighth = menu.itemArray[6];                                  // 1/8
+    call(eighth.target, eighth.action, eighth);
+    EXPECT(values[DelaySync] == 6 && gestureBegins == syncBegins+1);
+    refresh(root);
+    EXPECT(timeKnob.alphaValue < 1 && [[timeKnob valueForKey:@"title"] isEqualToString:@"TIME · 1/8"]);
+    EXPECT([((NSTextField*)[timeKnob valueForKey:@"field_"]).stringValue isEqualToString:@"250 ms"]);      // at 120 BPM
+    status.tempo = 90; refresh(root);
+    EXPECT([((NSTextField*)[timeKnob valueForKey:@"field_"]).stringValue isEqualToString:@"333 ms"]);
+    NSMenuItem* dotted = menu.itemArray[10];                                 // 1/4. at 90 BPM is a second
+    call(dotted.target, dotted.action, dotted);
+    refresh(root);
+    EXPECT([((NSTextField*)[timeKnob valueForKey:@"field_"]).stringValue isEqualToString:@"1.00 s"]);
+    NSMenuItem* free = menu.itemArray[0];
+    call(free.target, free.action, free);
+    refresh(root);
+    EXPECT(values[DelaySync] == 0 && timeKnob.alphaValue == 1 && [[timeKnob valueForKey:@"title"] isEqualToString:@"TIME"]);
+    status.tempo = 0;
+    EXPECT(gestureBegins == gestureEnds);
     // The Width block has no third knob in any flavor.
     NSView* width = panels[WidthBlock];
     EXPECT(find(width, @"FXKnob")[2].hidden);
@@ -181,6 +210,7 @@ int main(int argc, char** argv) {
         const char* eq = std::strchr(argv[i], '=');
         if (!eq) { std::fprintf(stderr, "bad override %s\n", argv[i]); return 2; }
         const std::string name = lower(std::string(argv[i], static_cast<size_t>(eq-argv[i])).c_str());
+        if (name == "tempo") { status.tempo = std::atof(eq+1); continue; }
         if (name == "in") { status.inputPeak = static_cast<float>(std::atof(eq+1)); continue; }
         if (name == "out") { status.outputPeak = static_cast<float>(std::atof(eq+1)); continue; }
         if (findParam(name) < 0) { std::fprintf(stderr, "unknown key %s\n", name.c_str()); return 2; }

@@ -1,6 +1,6 @@
 # Controls
 
-41 parameters: 5 for the whole box (and Auto Gain, appended last so older sessions keep their IDs), then six for each block (On, Flavor, three knobs and Mix; Width has no third knob, so five). Everything automates, everything except the switches and pickers accepts CLAP modulation, and everything can be typed into its box in the units it shows (`1.5k`, `250 ms`, `8 bit`, `3 s`, `-6 dB`, `fuzz`). In Bitwig there are seven remote-control pages: one per block and one for **Master**.
+42 parameters: 5 for the whole box (and Auto Gain and the delay's Sync, appended last so older sessions keep their IDs), then six for each block (On, Flavor, three knobs and Mix; Width has no third knob, so five). Everything automates, everything except the switches and pickers accepts CLAP modulation, and everything can be typed into its box in the units it shows (`1.5k`, `250 ms`, `8 bit`, `3 s`, `-6 dB`, `fuzz`). In Bitwig there are seven remote-control pages: one per block and one for **Master**.
 
 ## The chain
 
@@ -61,7 +61,16 @@ Overdrive and Fuzz are loudness-compensated against the amount of drive: the out
 | **Ping-Pong** | The input goes into the left line; each line feeds the other, so echoes alternate, left first. |
 | **Tape** | The time drifts (a slow wow and a fast flutter, a little different in each ear), and the loop is high-passed at 120 Hz and saturates, so each repeat is darker, looser and rounder. |
 
-**Time** 20 ms–1 s (logarithmic; changing it glides over 50 ms, with the pitch glide an old echo has). **Feedback** 0–90%. **Tone** is the cutoff of the low-pass in the feedback, so repeats lose their top as they fade: 400 Hz–12 kHz in Digital and Ping-Pong, 300 Hz–6 kHz in Tape.
+**Time** 20 ms–1 s (logarithmic; changing it glides over 50 ms, with the pitch glide an old echo has), or **Sync**. **Feedback** 0–90%. **Tone** is the cutoff of the low-pass in the feedback, so repeats lose their top as they fade: 400 Hz–12 kHz in Digital and Ping-Pong, 300 Hz–6 kHz in Tape.
+
+### Tempo sync
+
+The **Sync** menu beside the caption is *Free* (the Time knob rules) or a note value that follows the host's tempo: 1/32, 1/16, 1/8, 1/4, 1/2 and 1/1 (a bar of four beats), each with a triplet (T, a third shorter) and, from 1/16 to 1/4, a dotted version (half again as long), 12 values in all. While one is chosen the Time knob is dimmed, relabeled `TIME · 1/8.` and shows the time that comes to (`375 ms`, `1.00 s`); it is not in charge until Sync goes back to Free.
+
+- The tempo comes from the host's transport, whether or not it is playing. Until the host has said, the delay assumes 120 BPM, and the first tempo it hears is taken at once rather than glided to.
+- A tempo that changes later (or automation of the tempo) glides the delay time over about 50 ms, so a ramp is a smooth pitch bend of the repeats, as it is with the Time knob.
+- The time is held between 20 ms and 4 s: a bar at 30 BPM is 8 s, so it plays as 4 s. The delay line holds 4 s.
+- It works with all three delay flavors, and the reported tail follows the synced time. Measured: 1/8 at 120 BPM is an echo at 250.00 ms, a dotted quarter at 90 BPM at 1000.00 ms, and a triplet sixteenth at 140 BPM at 71.44 ms (71.43 expected), to the sample.
 
 ## Reverb
 

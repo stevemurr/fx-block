@@ -234,7 +234,71 @@ void autoGainHoldsAndIsLimited() {
     CHECK(worst < .1);
 }
 
+// Tempo sync: a note value at the host's tempo is the delay time, the knob is ignored, and Free hands it back.
+void delaySyncFollowsTheTempo() {
+    const double rate = 48000;
+    auto echoAt = [&](double bpm, uint32_t division, double knobMs, double seconds) {
+        Values v = oneBlock(DelayBlock, 0, knobMs, 0, 100, 100); v[DelaySync] = division;
+        Chain c = make(v, rate);
+        c.setTempo(bpm);
+        const auto out = renderImpulse(c, static_cast<size_t>(rate*seconds));
+        size_t at = 0; float best = 0;
+        for (size_t i = 50; i < out.size(); ++i) if (std::abs(out[i].l) > best) { best = std::abs(out[i].l); at = i; }
+        CHECK(best > .5f);
+        return static_cast<double>(at)/rate*1000;
+    };
+    struct Case { double bpm; uint32_t division; double ms; };
+    const Case cases[] {
+        {120, 6, 250},                   // 1/8 at 120
+        {120, 9, 500},                   // 1/4
+        {90, 10, 1000},                  // 1/4. at 90 BPM: 1.5 beats of 666.7 ms
+        {140, 2, 71.43},                 // 1/16T
+        {200, 1, 37.5},                  // 1/32
+        {75, 7, 600},                    // 1/8.: 0.75 beats of 800 ms
+        {60, 12, 4000},                  // a bar at 60 BPM is exactly the longest the delay holds
+    };
+    for (const Case& test : cases) {
+        const double ms = echoAt(test.bpm, test.division, 777, test.ms/1000+.3);
+        std::printf("delay sync %s at %.0f BPM: echo at %.2f ms (expected %.2f)\n", syncNames[test.division], test.bpm, ms, test.ms);
+        CHECK(std::abs(ms-test.ms) < 1000./rate*3);
+    }
+    // Longer than the line: held at 4 s. Shorter than a delay: held at 20 ms.
+    CHECK(std::abs(echoAt(30, 12, 300, 4.3)-4000) < 1000./rate*3);
+    CHECK(std::abs(echoAt(999, 1, 300, .2)-20) < 1000./rate*3);
+    // Free: the tempo is not heard.
+    CHECK(std::abs(echoAt(60, 0, 100, .4)-100) < 1000./rate*3 && std::abs(echoAt(200, 0, 100, .4)-100) < 1000./rate*3);
+    // Before a tempo is heard the delay assumes 120; the first one heard is taken at once, with no glide from the assumption.
+    Values v = oneBlock(DelayBlock, 0, 300, 0, 100, 100); v[DelaySync] = 9;
+    Chain c = make(v);
+    const auto assumed = renderImpulse(c, 30000);
+    size_t at = 0; float best = 0;
+    for (size_t i = 50; i < assumed.size(); ++i) if (std::abs(assumed[i].l) > best) { best = std::abs(assumed[i].l); at = i; }
+    CHECK(std::abs(static_cast<double>(at)-24000) < 3);
+    // A tempo that changes later glides to the new time: after it settles the echo is where the new tempo puts it.
+    Chain d = make(v); d.setTempo(120);
+    for (size_t i = 0; i < 48000; ++i) d.process({static_cast<float>(.3*std::sin(2*pi*220*static_cast<double>(i)/48000)), 0.f});
+    d.setTempo(60);
+    float previous = 0, worstStep = 0;
+    for (size_t i = 0; i < 48000*3; ++i) {
+        const float x = static_cast<float>(.3*std::sin(2*pi*220*static_cast<double>(i)/48000));
+        const auto y = d.process({x, 0.f});
+        CHECK(std::isfinite(y.l)); worstStep = std::max(worstStep, std::abs(y.l-previous)); previous = y.l;
+    }
+    CHECK(worstStep < 1.5f);                                                   // a pitch glide, not a click
+    const auto after = renderImpulse(d, 60000);
+    at = 0; best = 0;
+    for (size_t i = 50; i < after.size(); ++i) if (std::abs(after[i].l) > best) { best = std::abs(after[i].l); at = i; }
+    CHECK(std::abs(static_cast<double>(at)-48000) < 3);
+    // The reported tail follows the synced time: a half-note delay at 60 BPM rings for seconds, a 1/32 at 200 BPM for a moment.
+    Values slow = oneBlock(DelayBlock, 0, 300, 50, 100, 100); slow[DelaySync] = 11;
+    Chain s = make(slow); s.setTempo(60);
+    Values quick = slow; quick[DelaySync] = 1;
+    Chain q = make(quick); q.setTempo(200);
+    std::printf("delay sync tails: %.1f s for a half note at 60 BPM, %.2f s for a 1/32 at 200 BPM\n", static_cast<double>(s.tailSamples())/rate, static_cast<double>(q.tailSamples())/rate);
+    CHECK(s.tailSamples() >= static_cast<size_t>(9.5*rate) && q.tailSamples() < static_cast<size_t>(1.*rate));
+}
+
 int main() {
-    neutralIsTransparent(); everythingOnIsStable(); gainsMixAndBypass(); filterOrderMatters(); tailsFollowTheSettings(); resetAndDeterminism(); autoGainMatchesTheDry(); autoGainHoldsAndIsLimited(); speed();
+    neutralIsTransparent(); everythingOnIsStable(); gainsMixAndBypass(); filterOrderMatters(); tailsFollowTheSettings(); resetAndDeterminism(); autoGainMatchesTheDry(); autoGainHoldsAndIsLimited(); delaySyncFollowsTheTempo(); speed();
     std::cout << "Chain: transparency, stability at five sample rates, gain/mix/bypass, filter order, tails, reset and speed passed\n";
 }

@@ -29,6 +29,11 @@ struct Events {
         e.header = {sizeof(e), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0};
         e.param_id = id; e.value = value; e.note_id = e.port_index = e.channel = e.key = -1;
     }
+    void tempo(double bpm, uint32_t time = 0) {
+        auto& e = add<clap_event_transport_t>();
+        e.header = {sizeof(e), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0};
+        e.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_IS_PLAYING; e.tempo = bpm;
+    }
     void modulation(clap_id id, double amount, uint32_t time = 0) {
         auto& e = add<clap_event_param_mod_t>();
         e.header = {sizeof(e), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_MOD, 0};
@@ -81,12 +86,13 @@ struct Fixture {
     void set(clap_id id, double value) { Events e; e.param(id, value); params->flush(plugin, &e.api, nullptr); }
     double get(clap_id id) { double value = 0; CHECK(params->get_value(plugin, id, &value)); return value; }
     void activate(double rate = 48000) { CHECK(plugin->activate(plugin, rate, 1, 512)); CHECK(plugin->start_processing(plugin)); }
-    void process(uint32_t frames, Events* events = nullptr) {
+    void process(uint32_t frames, Events* events = nullptr, const clap_event_transport_t* transport = nullptr) {
         clap_process_t p {};
         p.steady_time = -1; p.frames_count = frames;
         p.audio_inputs = &buffer; p.audio_outputs = &buffer;
         p.audio_inputs_count = p.audio_outputs_count = 1;
         p.in_events = events ? &events->api : nullptr;
+        p.transport = transport;
         CHECK(plugin->process(plugin, &p) == CLAP_PROCESS_CONTINUE);
     }
 };
@@ -177,12 +183,13 @@ void stateRoundTrips() {
     f.set(Input, 4.5); f.set(Mix, 73); f.set(FilterOrder, 1);
     f.set(blockParam(DriveBlock, On), 1); f.set(blockParam(DriveBlock, Flavor), 2); f.set(blockParam(DriveBlock, P1), 61.25);
     f.set(blockParam(ReverbBlock, Flavor), 1); f.set(blockParam(ReverbBlock, P3), 42); f.set(blockParam(WidthBlock, BlockMix), 12);
+    f.set(DelaySync, 9);
     MemoryStream first; CHECK(f.state->save(f.plugin, &first.output));
     f.set(Input, 0); f.set(Mix, 0); f.set(FilterOrder, 0); f.set(blockParam(DriveBlock, On), 0); f.set(blockParam(DriveBlock, Flavor), 0);
-    f.set(blockParam(DriveBlock, P1), 5); f.set(blockParam(ReverbBlock, Flavor), 0);
+    f.set(blockParam(DriveBlock, P1), 5); f.set(blockParam(ReverbBlock, Flavor), 0); f.set(DelaySync, 0);
     CHECK(f.state->load(f.plugin, &first.input));
     CHECK(f.get(Input) == 4.5 && f.get(Mix) == 73 && f.get(FilterOrder) == 1);
-    CHECK(f.get(blockParam(DriveBlock, On)) == 1 && f.get(blockParam(DriveBlock, Flavor)) == 2 && f.get(blockParam(DriveBlock, P1)) == 61.25);
+    CHECK(f.get(DelaySync) == 9 && f.get(blockParam(DriveBlock, On)) == 1 && f.get(blockParam(DriveBlock, Flavor)) == 2 && f.get(blockParam(DriveBlock, P1)) == 61.25);
     CHECK(f.get(blockParam(ReverbBlock, Flavor)) == 1 && f.get(blockParam(ReverbBlock, P3)) == 42 && f.get(blockParam(WidthBlock, BlockMix)) == 12);
     CHECK(rescans > 0);
     MemoryStream second; CHECK(f.state->save(f.plugin, &second.output));
@@ -217,13 +224,13 @@ void sessionsAcrossVersions() {
     g.set(blockParam(DelayBlock, P1), 99);
     CHECK(g.state->load(g.plugin, &old.input));
     CHECK(g.get(Mix) == 77 && g.get(blockParam(DelayBlock, P1)) == paramInfo(blockParam(DelayBlock, P1)).initial);
-    // A session from before Auto Gain existed (one parameter fewer) loads with it off.
+    // A session from before Auto Gain and Sync existed (two parameters fewer) loads with both off.
     MemoryStream before;
-    load(before, std::vector<uint8_t>(saved.data.begin(), saved.data.end()-12));
-    before.data[8] = static_cast<uint8_t>(ParamCount-1);
+    load(before, std::vector<uint8_t>(saved.data.begin(), saved.data.end()-24));
+    before.data[8] = static_cast<uint8_t>(ParamCount-2);
     Fixture a;
-    a.set(AutoGain, 1);
-    CHECK(a.state->load(a.plugin, &before.input) && a.get(AutoGain) == 0 && a.get(Mix) == 77);
+    a.set(AutoGain, 1); a.set(DelaySync, 9);
+    CHECK(a.state->load(a.plugin, &before.input) && a.get(AutoGain) == 0 && a.get(DelaySync) == 0 && a.get(Mix) == 77);
     // An extra id from the future is ignored.
     MemoryStream newer; load(newer, saved.data);
     newer.data[8] = static_cast<uint8_t>(ParamCount+1);
@@ -328,6 +335,48 @@ void tailIsReported() {
     CHECK(tail->get(f.plugin) == 0);
 }
 
+// The host's tempo reaches a synced delay: from the process call's transport, or from a transport event, and before
+// either is heard the delay assumes 120 BPM.
+void tempoThroughTheHost() {
+    struct Case { const char* name; double bpm; bool viaEvent; bool silent; double expectedMs; };
+    const Case cases[] {
+        {"transport pointer at 100 BPM", 100, false, false, 600},
+        {"transport event at 75 BPM", 75, true, false, 800},
+        {"no tempo at all", 0, false, true, 500},
+    };
+    for (const Case& test : cases) {
+        Fixture f;
+        f.set(blockParam(DelayBlock, On), 1); f.set(blockParam(DelayBlock, Flavor), 0);
+        f.set(blockParam(DelayBlock, P2), 0); f.set(blockParam(DelayBlock, BlockMix), 100); f.set(blockParam(DelayBlock, P3), 100);
+        f.set(DelaySync, 9);                                                     // 1/4
+        f.activate();
+        clap_event_transport_t transport {};
+        transport.header = {sizeof(transport), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0};
+        transport.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_IS_PLAYING; transport.tempo = test.bpm;
+        std::vector<float> out;
+        for (int block = 0; block < 80; ++block) {
+            f.left.fill(0); f.right.fill(0);
+            if (block == 0) { f.left[0] = f.right[0] = 1.f; }
+            Events events;
+            if (block == 0 && test.viaEvent) events.tempo(test.bpm);
+            f.process(512, test.viaEvent ? &events : nullptr, !test.viaEvent && !test.silent ? &transport : nullptr);
+            out.insert(out.end(), f.left.begin(), f.left.end());
+        }
+        size_t at = 0; float best = 0;
+        for (size_t i = 100; i < out.size(); ++i) if (std::abs(out[i]) > best) { best = std::abs(out[i]); at = i; }
+        std::printf("tempo, %s: echo at %.2f ms (expected %.0f)\n", test.name, static_cast<double>(at)/48., test.expectedMs);
+        CHECK(best > .5f && std::abs(static_cast<double>(at)/48.-test.expectedMs) < .2);
+    }
+    // The sync parameter is filed under Delay.
+    Fixture g;
+    clap_param_info_t info {};
+    CHECK(g.params->get_info(g.plugin, exposedCount-1, &info) && info.id == DelaySync);
+    CHECK(std::strcmp(info.module, "Delay") == 0 && std::strcmp(info.name, "Sync") == 0 && (info.flags & CLAP_PARAM_IS_ENUM) && !(info.flags & CLAP_PARAM_IS_MODULATABLE));
+    char text[32]; double value = -1;
+    CHECK(g.params->value_to_text(g.plugin, DelaySync, 7, text, sizeof(text)) && !std::strcmp(text, "1/8."));
+    CHECK(g.params->text_to_value(g.plugin, DelaySync, "1/16T", &value) && value == 2);
+}
+
 // Everything on, through the host interface, at the host's buffer sizes: the output is finite and the effects make a difference.
 void audioThroughTheHost() {
     Fixture f;
@@ -365,10 +414,10 @@ void editorOpensAndCloses() {
 int main() {
     CHECK(clap_entry.init("test")); CHECK(clap_entry.init("test"));
     CHECK(!clap_entry.get_factory("unknown"));
-    descriptorAndPorts(); parametersAndText(); stateRoundTrips(); sessionsAcrossVersions(); remotePages(); automationAndInPlace(); tailIsReported(); audioThroughTheHost();
+    descriptorAndPorts(); parametersAndText(); stateRoundTrips(); sessionsAcrossVersions(); remotePages(); automationAndInPlace(); tailIsReported(); tempoThroughTheHost(); audioThroughTheHost();
 #ifdef __APPLE__
     editorOpensAndCloses();
 #endif
     clap_entry.deinit(); clap_entry.deinit();
-    std::cout << "CLAP: lifecycle, 41 parameters with flavor-aware text, state and version tolerance, corruption, ports, remote pages, automation, modulation, tail and editor passed\n";
+    std::cout << "CLAP: lifecycle, 42 parameters with flavor-aware text, state and version tolerance, corruption, ports, remote pages, automation, modulation, tail and editor passed\n";
 }

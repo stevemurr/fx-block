@@ -10,6 +10,7 @@ struct BlockSettings {
     uint32_t flavor = 0;
     double p1 = 0, p2 = 0, p3 = 0;
     double mix = 1;                  // 0..1
+    uint32_t sync = 0;               // the delay's note value (see syncBeats); 0 is free
 };
 
 // ---------------------------------------------------------------- the six effects
@@ -100,12 +101,18 @@ public:
     void set(const BlockSettings& s, bool immediate) noexcept;
     uint32_t flavor() const noexcept { return flavor_; }
     void setFlavor(uint32_t flavor) noexcept { flavor_ = flavor; clearState(); retarget(); tone_ = toneGoal_; }
+    // The host's tempo, for a synced delay. The first one heard is taken at once; after that the time glides.
+    void setTempo(double bpm) noexcept;
     Stereo process(Stereo in) noexcept;
     size_t tailSamples() const noexcept;
+    static constexpr double maxMs = 4000;
 private:
     void clearState() noexcept;
     void retarget() noexcept;
+    double timeMs() const noexcept;                                         // the Time knob, or the note value at the tempo
     double rate_ = 48000, timeSmooth_ = .0005, smooth_ = .001;
+    double tempo_ = 120;
+    bool tempoSeen_ = false;
     uint32_t flavor_ = 0;
     BlockSettings target_;
     double ms_ = 300, tone_ = .3, toneGoal_ = .3;                          // the tone is kept as a filter coefficient

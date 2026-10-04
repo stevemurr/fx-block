@@ -5,6 +5,7 @@ namespace fxblock {
 // What the editor shows of the signal.
 struct Status {
     float inputPeak = 0, outputPeak = 0;      // roughly 0..1
+    double tempo = 0;                          // the host's tempo in beats per minute, 0 until it has said (filled in by the plugin)
 };
 
 // Input trim, then Filter, Drive, Modulation, Delay, Reverb and Width in that order (the filter can move to after
@@ -19,7 +20,9 @@ public:
     Stereo process(Stereo in) noexcept;
     // Samples the effects keep sounding after the input stops, for the settings now in force.
     size_t tailSamples() const noexcept;
-    Status status() const noexcept { return {inputPeak_, outputPeak_}; }
+    // The host's tempo, which a synced delay follows.
+    void setTempo(double bpm) noexcept { delay_.fx.setTempo(bpm); }
+    Status status() const noexcept { Status s; s.inputPeak = inputPeak_; s.outputPeak = outputPeak_; return s; }
 private:
     double rate_ = 48000, smooth_ = .001, peakDecay_ = .9998;
     double inputGoal_ = 1, outputGoal_ = 1, mixGoal_ = 1, bypassGoal_ = 0;

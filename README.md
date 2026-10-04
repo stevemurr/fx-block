@@ -7,7 +7,7 @@ A swiss-army effects box, as a CLAP plugin for macOS: six blocks in a chain, **F
 | **Filter** | Lowpass · Highpass · Bandpass (12 or 24 dB per octave, with resonance) |
 | **Drive** | Overdrive · Fuzz · Crush |
 | **Modulation** | Chorus · Flanger · Phaser |
-| **Delay** | Digital · Ping-Pong · Tape |
+| **Delay** | Digital · Ping-Pong · Tape (free, or synced to the host's tempo) |
 | **Reverb** | Room · Hall · Plate |
 | **Width** | Stereo (mid/side) · Haas · Spread |
 
@@ -37,7 +37,7 @@ Cmake option `-DFXBLOCK_SANITIZE=ON` builds everything with AddressSanitizer and
 ## Layout
 
 ```
-src/Parameters.h   the 41 parameters, flavor tables, real-unit mappings, text in and out
+src/Parameters.h   the 42 parameters, flavor tables, real-unit mappings, text in and out
 src/Blocks.h       the six effects and the Stage that gives each the same on/off, flavor-change and mix behavior
 src/Filter.cpp … Width.cpp, Chain.cpp   the DSP
 src/Plugin.cpp     the CLAP plugin: ports, parameters, state, remote controls, GUI hooks

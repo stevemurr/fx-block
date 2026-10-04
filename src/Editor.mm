@@ -55,6 +55,7 @@ static void fillPanel(NSRect r, CGFloat radius, NSColor* fill, NSColor* stroke) 
 - (void)commit:(uint32_t)pid value:(double)value; // begin + set + end
 - (NSString*)textFor:(uint32_t)pid value:(double)value;   // in the units of the parameter's block's flavor
 - (BOOL)parse:(NSString*)text for:(uint32_t)pid into:(double*)value;
+- (double)tempo;                                           // the host's, or 120 until it says
 @end
 
 // ---------------------------------------------------------------- knob
@@ -65,6 +66,8 @@ static void fillPanel(NSRect r, CGFloat radius, NSColor* fill, NSColor* stroke) 
 @property (nonatomic) NSColor* tint;
 @property (nonatomic) BOOL compact;
 @property (nonatomic) NSString* detail;
+@property (nonatomic) NSString* overrideText;     // shown instead of the value (a synced delay's time)
+@property (nonatomic) BOOL dimmed;                // drawn faint: set, but something else is in charge
 - (void)sync;
 @end
 @implementation FXKnob {
@@ -102,7 +105,8 @@ static void fillPanel(NSRect r, CGFloat radius, NSColor* fill, NSColor* stroke) 
     const double value = [_host valueFor:_param];
     const double pos = toNormalized(_param, value);
     if (!interacting_ && cont_ < 0) cont_ = pos;
-    NSString* text = [_host textFor:_param value:value];
+    NSString* text = _overrideText ? _overrideText : [_host textFor:_param value:value];
+    self.alphaValue = _dimmed ? .45 : 1;
     if (pos != pos_ || ![field_.stringValue isEqualToString:text]) {
         pos_ = pos;
         if (!field_.currentEditor) field_.stringValue = text;
@@ -288,6 +292,62 @@ static void fillPanel(NSRect r, CGFloat radius, NSColor* fill, NSColor* stroke) 
 }
 @end
 
+// ---------------------------------------------------------------- menu: one of many choices, in a pop-up
+@interface FXMenuField : NSView
+@property (weak) id<FXHost> host;
+@property (nonatomic) uint32_t param;
+@property (nonatomic) NSArray<NSString*>* titles;
+@property (nonatomic) NSColor* tint;
+@property (nonatomic) NSString* label;
+@property (nonatomic) NSInteger selected;
+@property NSString* spoken;
+- (NSMenu*)buildMenu;
+@end
+@implementation FXMenuField
+- (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { (void)event; return YES; }
+- (void)setSelected:(NSInteger)selected { if (_selected != selected) { _selected = selected; self.needsDisplay = YES; } }
+- (void)setTint:(NSColor*)tint { if (![_tint isEqual:tint]) { _tint = tint; self.needsDisplay = YES; } }
+- (NSMenu*)buildMenu {
+    auto* menu = [[NSMenu alloc] initWithTitle:@""];
+    for (NSUInteger i = 0; i < _titles.count; ++i) {
+        auto* item = [[NSMenuItem alloc] initWithTitle:_titles[i] action:@selector(chosen:) keyEquivalent:@""];
+        item.target = self; item.tag = static_cast<NSInteger>(i);
+        item.state = static_cast<NSInteger>(i) == _selected ? NSControlStateValueOn : NSControlStateValueOff;
+        [menu addItem:item];
+    }
+    return menu;
+}
+- (void)chosen:(NSMenuItem*)item {
+    [_host commit:_param value:static_cast<double>(item.tag)];
+    self.selected = item.tag;
+}
+- (void)mouseDown:(NSEvent*)event {
+    (void)event;
+    [self.window makeFirstResponder:nil];
+    NSMenu* menu = [self buildMenu];
+    [menu popUpMenuPositioningItem:menu.itemArray[static_cast<NSUInteger>(std::clamp<NSInteger>(_selected, 0, static_cast<NSInteger>(_titles.count)-1))]
+                        atLocation:NSMakePoint(0, self.bounds.size.height) inView:self];
+}
+- (BOOL)isAccessibilityElement { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityPopUpButtonRole; }
+- (NSString*)accessibilityLabel { return _spoken ? _spoken : _label; }
+- (id)accessibilityValue { return _titles.count ? _titles[static_cast<NSUInteger>(std::clamp<NSInteger>(_selected, 0, static_cast<NSInteger>(_titles.count)-1))] : @""; }
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    const NSRect b = self.bounds;
+    const BOOL active = _selected != 0;
+    fillPanel(b, b.size.height/2, active ? [_tint colorWithAlphaComponent:.16] : color(kBackground, .6), active ? _tint : color(kLine));
+    NSString* text = [NSString stringWithFormat:@"%@ %@", _label, _titles.count ? _titles[static_cast<NSUInteger>(std::clamp<NSInteger>(_selected, 0, static_cast<NSInteger>(_titles.count)-1))].uppercaseString : @""];
+    drawText(text, NSMakeRect(10, (b.size.height-13)/2+.5, b.size.width-26, 13), 9.5, active ? _tint : color(kDim), NSFontWeightBold, 1.0, NSTextAlignmentLeft);
+    auto* chevron = [NSBezierPath bezierPath];
+    const CGFloat cx = b.size.width-13, cy = b.size.height/2;
+    [chevron moveToPoint:NSMakePoint(cx-3.5, cy-1.5)]; [chevron lineToPoint:NSMakePoint(cx, cy+2)]; [chevron lineToPoint:NSMakePoint(cx+3.5, cy-1.5)];
+    chevron.lineWidth = 1.6; chevron.lineCapStyle = NSLineCapStyleRound; chevron.lineJoinStyle = NSLineJoinStyleRound;
+    [(active ? _tint : color(kDim)) setStroke]; [chevron stroke];
+}
+@end
+
 // ---------------------------------------------------------------- block panel
 static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, kPanelGap = 16, kRowGap = 14, kKnobW = 100, kKnobH = 108, kKnobY = 68;
 
@@ -302,6 +362,7 @@ static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, 
     FXPicker* flavor_;
     FXKnob* knobs_[4];                  // P1, P2, P3, Mix
     FXPicker* slope_;                   // the filter's 12/24 dB choice stands in for its third knob
+    FXMenuField* sync_;                 // the delay's tempo sync
     uint32_t shownFlavor_;
     BOOL shownOn_;
 }
@@ -339,6 +400,15 @@ static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, 
         slope_.toolTip = @"How steeply the filter cuts: 12 or 24 dB per octave. 24 dB is sharper, and rings more with resonance.";
         [self addSubview:slope_];
     }
+    if (block == DelayBlock) {
+        NSMutableArray* names = [NSMutableArray array];
+        for (uint32_t i = 0; i < syncCount; ++i) [names addObject:[NSString stringWithUTF8String:syncNames[i]]];
+        sync_ = [[FXMenuField alloc] initWithFrame:NSMakeRect(kPanelW-14-112, 40, 112, 22)];
+        sync_.host = host; sync_.param = DelaySync; sync_.titles = names; sync_.tint = tint; sync_.label = @"SYNC";
+        sync_.spoken = @"Delay tempo sync";
+        sync_.toolTip = @"Free: the Time knob sets the delay. Or lock it to a note value at the host's tempo (T is a triplet, a dot is half again as long).";
+        [self addSubview:sync_];
+    }
     return self;
 }
 - (void)sync {
@@ -366,6 +436,23 @@ static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, 
         self.needsDisplay = YES;
     }
     for (int k = 0; k < 4; ++k) if (!knobs_[k].hidden) [knobs_[k] sync];
+    if (sync_) {
+        const NSInteger division = static_cast<NSInteger>([_host valueFor:DelaySync]);
+        sync_.selected = division; sync_.tint = tint;
+        // Synced, the Time knob is not in charge: it shows what the note value comes to at the tempo.
+        FXKnob* time = knobs_[0];
+        if (division > 0 && division < static_cast<NSInteger>(syncCount)) {
+            const double ms = std::clamp(syncBeats[static_cast<size_t>(division)]*60000./[_host tempo], 20., 4000.);
+            time.title = [NSString stringWithFormat:@"TIME · %s", syncNames[static_cast<size_t>(division)]];
+            time.overrideText = ms >= 1000 ? [NSString stringWithFormat:@"%.2f s", ms*.001] : [NSString stringWithFormat:@"%.0f ms", ms];
+            time.dimmed = YES;
+            time.detail = @"Time while Sync is Free. With a note value chosen, the delay follows the host's tempo and this shows the time it comes to.";
+        } else {
+            time.title = [NSString stringWithUTF8String:flavorInfo(_block, shownFlavor_ < flavorCount ? shownFlavor_ : 0).knob[0]];
+            time.overrideText = nil; time.dimmed = NO;
+        }
+        [time sync];
+    }
     if (slope_) { slope_.selected = [_host valueFor:blockParam(_block, P3)] >= .5 ? 1 : 0; slope_.tint = tint; }
 }
 - (void)drawRect:(NSRect)dirty {
@@ -380,7 +467,7 @@ static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, 
         drawText(@"SLOPE · DB/OCT", NSMakeRect(gap+2*(kKnobW+gap), kKnobY+3, kKnobW, 12), 10, color(on ? kDim : kFaint), NSFontWeightSemibold, 1.0, NSTextAlignmentCenter);
     }
     if (shownFlavor_ < flavorCount)
-        drawText([NSString stringWithUTF8String:flavorInfo(_block, shownFlavor_).caption], NSMakeRect(16, 46, kPanelW-32, 14), 10.5,
+        drawText([NSString stringWithUTF8String:flavorInfo(_block, shownFlavor_).caption], NSMakeRect(16, 46, kPanelW-32-(sync_ ? 124 : 0), 14), 10.5,
                  color(on ? kDim : kFaint), NSFontWeightRegular, 0, NSTextAlignmentLeft);
 }
 @end
@@ -424,6 +511,7 @@ static const CGFloat kMargin = 24, kHeaderH = 92, kPanelW = 448, kPanelH = 186, 
 - (BOOL)parse:(NSString*)text for:(uint32_t)pid into:(double*)value {
     return parseValue(pid, text.UTF8String, [self flavorOf:pid], *value);
 }
+- (double)tempo { return status_.tempo > 0 ? status_.tempo : 120; }
 
 - (instancetype)initWithCallbacks:(EditorCallbacks)callbacks {
     self = [super initWithFrame:NSMakeRect(0, 0, Editor::width, Editor::height)];

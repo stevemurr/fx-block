@@ -29,6 +29,7 @@ struct Plugin {
     TripleBuffer<Status> statusBuffer;
     Status shownStatus;
     bool active = false, processing = false;
+    double tempo = 0;                      // the host's, in beats per minute; 0 until it has said
 
     explicit Plugin(const clap_host_t* h) : host(h) {
         const auto initial = defaults();
@@ -56,6 +57,7 @@ struct Plugin {
             s.modulation.fill(0);
             s.dsp.prepare(rate);
             s.dsp.set(s.snapshot(), true);
+            if (s.tempo > 0) s.dsp.setTempo(s.tempo);
             s.active = true;
             return true;
         } catch (...) { return false; } // No C++ exceptions cross the C ABI.
@@ -68,6 +70,9 @@ struct Plugin {
         s.modulation.fill(0);
         s.dsp.reset();
         s.dsp.set(s.snapshot(), true);
+    }
+    void transport(const clap_event_transport_t* e) noexcept {
+        if (e && (e->flags & CLAP_TRANSPORT_HAS_TEMPO) && std::isfinite(e->tempo) && e->tempo > 0) { tempo = e->tempo; dsp.setTempo(tempo); }
     }
     void event(const clap_event_header_t* header) noexcept {
         if (!header || header->space_id != CLAP_CORE_EVENT_SPACE_ID) return;
@@ -85,6 +90,9 @@ struct Plugin {
                 if (e.param_id < ParamCount && !paramInfo(e.param_id).stepped && e.note_id == -1 && e.port_index == -1 && e.channel == -1 && e.key == -1 && std::isfinite(e.amount))
                     modulation[e.param_id] = e.amount;
             }
+            break;
+        case CLAP_EVENT_TRANSPORT:
+            if (header->size >= sizeof(clap_event_transport_t)) transport(reinterpret_cast<const clap_event_transport_t*>(header));
             break;
         default: break;
         }
@@ -126,6 +134,7 @@ struct Plugin {
             !in.data32[0] || !in.data32[1] || !out.data32[0] || !out.data32[1]) return CLAP_PROCESS_ERROR;
         out.constant_mask = 0;
         s.drainUi(block->out_events);
+        s.transport(block->transport);
         s.dsp.set(s.snapshot(true));
         const auto* events = block->in_events;
         const uint32_t count = events ? events->size(events) : 0;
@@ -143,6 +152,7 @@ struct Plugin {
             out.data32[0][i] = sample.l; out.data32[1][i] = sample.r;
         }
         s.statusBuffer.writeSlot() = s.dsp.status();
+        s.statusBuffer.writeSlot().tempo = s.tempo;
         s.statusBuffer.publish();
         return CLAP_PROCESS_CONTINUE;
     }
@@ -165,18 +175,14 @@ bool CLAP_ABI portInfo(const clap_plugin_t*, uint32_t index, bool input, clap_au
 const clap_plugin_audio_ports_t audioPorts {portCount, portInfo};
 
 // The Width block's unused third knob is not offered, so the host's index and the parameter id differ by one past it.
-void moduleName(uint32_t id, char* out, size_t size) {
-    if (isBlockParam(id)) std::snprintf(out, size, "%s", blockNames[blockOf(id)]);
-    else if (id == FilterOrder) std::snprintf(out, size, "%s", blockNames[FilterBlock]);
-    else std::snprintf(out, size, "%s", "Master");
-}
+void moduleName(uint32_t id, char* out, size_t size) { std::snprintf(out, size, "%s", moduleOf(id)); }
 void paramName(uint32_t id, char* out, size_t size) {
     if (!isBlockParam(id)) { std::snprintf(out, size, "%s", paramInfo(id).name); return; }
     const BlockKey key = keyOf(id);
     if (key >= P1 && key <= P3) std::snprintf(out, size, "%s", knobNames[blockOf(id)][key-P1]);
     else std::snprintf(out, size, "%s", paramInfo(id).name);
 }
-bool isLabelled(uint32_t id) { return id == Bypass || id == FilterOrder || id == AutoGain || (isBlockParam(id) && (keyOf(id) == On || keyOf(id) == Flavor)); }
+bool isLabelled(uint32_t id) { return id == Bypass || id == FilterOrder || id == AutoGain || id == DelaySync || (isBlockParam(id) && (keyOf(id) == On || keyOf(id) == Flavor)); }
 uint32_t flavorOf(const Plugin& p, uint32_t id) {
     return isBlockParam(id) ? static_cast<uint32_t>(p.values[blockParam(blockOf(id), Flavor)].load(std::memory_order_relaxed)) : 0;
 }
@@ -311,7 +317,7 @@ bool CLAP_ABI remotePage(const clap_plugin_t*, uint32_t index, clap_remote_contr
     } else {
         std::snprintf(page->page_name, sizeof(page->page_name), "%s", blockNames[index]);
         const clap_id keys[] {blockParam(index, On), blockParam(index, Flavor), blockParam(index, P1), blockParam(index, P2),
-            index == WidthBlock ? CLAP_INVALID_ID : blockParam(index, P3), blockParam(index, BlockMix)};
+            index == WidthBlock ? CLAP_INVALID_ID : blockParam(index, P3), blockParam(index, BlockMix), index == DelayBlock ? DelaySync : CLAP_INVALID_ID};
         std::copy(std::begin(keys), std::end(keys), ids.begin());
     }
     std::copy(ids.begin(), ids.end(), page->param_ids);

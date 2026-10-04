@@ -8,7 +8,7 @@ in ─ Input ─┬─ Filter ─ Drive ─ Modulation ─ Delay ─ Reverb ─ 
             └──────────────── dry ──────────────────────────────────┘
 ```
 
-Stereo in, stereo out, no latency, no MIDI. All state is the 41 parameters; there is no hidden state to save.
+Stereo in, stereo out, no latency, no MIDI. All state is the 42 parameters; there is no hidden state to save.
 
 ## One block, three flavors
 
@@ -22,7 +22,7 @@ A flavor is data plus a small amount of code in one class. The three knobs are s
 
 ## Parameters
 
-IDs are persistent and laid out as 5 globals, then 6 per block (`blockParam(block, key)`), then Auto Gain (appended last, which is why it is not with the other globals), so appending is safe and reordering is not. The Width block has no third knob; it keeps the slot so the arithmetic stays uniform and is simply not offered to the host (`exposedId`). State is `"FXBK"`, a version, a count and `(id, f64)` pairs: parameters missing from a session take their defaults and ids from a newer version are skipped, so adding parameters never breaks old sessions. Values are clamped on load; NaN is refused.
+IDs are persistent and laid out as 5 globals, then 6 per block (`blockParam(block, key)`), then Auto Gain and the delay's Sync (appended last, which is why they are not with the globals and the Delay block), so appending is safe and reordering is not. The Width block has no third knob; it keeps the slot so the arithmetic stays uniform and is simply not offered to the host (`exposedId`). State is `"FXBK"`, a version, a count and `(id, f64)` pairs: parameters missing from a session take their defaults and ids from a newer version are skipped, so adding parameters never breaks old sessions. Values are clamped on load; NaN is refused.
 
 ## Where the quality comes from
 
@@ -48,7 +48,7 @@ Four suites, all in `ctest`, all run clean under AddressSanitizer and UBSan:
 
 Not auditioned in a DAW by anyone yet: the tests and the validator say the plugin is correct to the spec and the measurements, not that it sounds the way you want. Also not here:
 
-- **Tempo-synced delay.** The delay is in milliseconds; it would need the host transport and a division picker.
+- **Other tempo-synced things.** Only the delay follows the host's tempo; the modulation rate is in Hz.
 - **Reorderable chain.** The order is fixed apart from the filter position.
 - **A fourth flavor, presets, or a bypass per block that remembers its tail.** A block that is switched off is cut, not allowed to ring out.
 - **Linux and Windows editors.** The DSP and plugin build anywhere; the editor is Cocoa. Without it the host's generic parameter UI works, and the remote-control pages are laid out for it.

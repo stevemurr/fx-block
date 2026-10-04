@@ -8,6 +8,7 @@ BlockSettings settingsFor(const Values& v, uint32_t block) {
     s.flavor = static_cast<uint32_t>(std::clamp(v[blockParam(block, Flavor)], 0., flavorCount-1.));
     s.p1 = v[blockParam(block, P1)]; s.p2 = v[blockParam(block, P2)]; s.p3 = v[blockParam(block, P3)];
     s.mix = std::clamp(v[blockParam(block, BlockMix)], 0., 100.)*.01;
+    if (block == DelayBlock) s.sync = static_cast<uint32_t>(std::clamp(v[DelaySync], 0., syncCount-1.));
     return s;
 }
 }

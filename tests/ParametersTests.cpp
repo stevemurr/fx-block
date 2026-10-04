@@ -8,7 +8,7 @@ using namespace fxblock;
 
 void layoutIsStable() {
     // The documented layout: five globals, then six blocks of six. Appending is allowed; moving is not.
-    CHECK(GlobalCount == 5 && BlockKeyCount == 6 && BlockCount == 6 && ParamCount == 5+36+1 && AutoGain == 41);                       // Auto Gain is appended after the blocks
+    CHECK(GlobalCount == 5 && BlockKeyCount == 6 && BlockCount == 6 && ParamCount == 5+36+2 && AutoGain == 41 && DelaySync == 42);     // Auto Gain and Sync are appended after the blocks
     CHECK(Input == 0 && Output == 1 && Mix == 2 && Bypass == 3 && FilterOrder == 4);
     CHECK(blockParam(FilterBlock, On) == 5 && blockParam(DriveBlock, On) == 11 && blockParam(WidthBlock, BlockMix) == AutoGain-1);
     for (uint32_t id = GlobalCount; id < AutoGain; ++id) CHECK(blockParam(blockOf(id), keyOf(id)) == id && blockOf(id) < BlockCount);
@@ -27,7 +27,7 @@ void infoIsConsistent() {
         CHECK(std::strlen(p.name) < 200);
         if (!paramUsed(id)) continue;
         // A host shows module and name together; they must be unique within the box.
-        std::string module = id < GlobalCount ? "Master" : blockNames[blockOf(id)];
+        std::string module = moduleOf(id);
         const std::string name = isBlockParam(id) && keyOf(id) >= P1 && keyOf(id) <= P3 ? knobNames[blockOf(id)][keyOf(id)-P1] : p.name;
         CHECK(!name.empty());
         CHECK(names.insert(module+"/"+name).second || id == FilterOrder);
@@ -37,7 +37,7 @@ void infoIsConsistent() {
     for (uint32_t id = 0; id < ParamCount; ++id) CHECK(d[id] == paramInfo(id).initial);
     // Everything starts off, so a fresh instance does nothing until a block is switched on.
     for (uint32_t b = 0; b < BlockCount; ++b) CHECK(d[blockParam(b, On)] == 0 && d[blockParam(b, Flavor)] == 0);
-    CHECK(d[AutoGain] == 0 && d[Mix] == 100 && d[Input] == 0 && d[Output] == 0 && d[Bypass] == 0);
+    CHECK(d[AutoGain] == 0 && d[DelaySync] == 0 && d[Mix] == 100 && d[Input] == 0 && d[Output] == 0 && d[Bypass] == 0);
 }
 
 void sanitizeAndNormalize() {
@@ -54,6 +54,27 @@ void sanitizeAndNormalize() {
         }
     }
     CHECK(sanitize(ParamCount, 5) == 0);
+}
+
+// The note values: Free, then twelve lengths in beats, shortest to longest, with triplets a third shorter and dots half
+// again as long than the plain note beside them.
+void syncValues() {
+    CHECK(syncCount == 13 && syncBeats[0] == 0);
+    // Listed by note value, as a host lists them: within a note the triplet, the plain note, then the dotted one; across notes, longer.
+    CHECK(syncBeats[3] > syncBeats[2] && syncBeats[4] > syncBeats[3] && syncBeats[6] > syncBeats[5] && syncBeats[7] > syncBeats[6] && syncBeats[9] > syncBeats[8] && syncBeats[10] > syncBeats[9]);
+    CHECK(syncBeats[1] < syncBeats[3] && syncBeats[3] < syncBeats[6] && syncBeats[6] < syncBeats[9] && syncBeats[9] < syncBeats[11] && syncBeats[11] < syncBeats[12]);
+    CHECK(syncBeats[syncCount-1] == 4);                                      // 1/1 is a bar of four beats
+    const auto beats = [&](const char* name) { for (uint32_t i = 0; i < syncCount; ++i) if (!std::strcmp(syncNames[i], name)) return syncBeats[i]; return -1.; };
+    CHECK(beats("1/4") == 1 && beats("1/8") == .5 && beats("1/16") == .25 && beats("1/2") == 2);
+    CHECK(std::abs(beats("1/8T")-beats("1/8")*2/3) < 1e-12 && std::abs(beats("1/4T")-beats("1/4")*2/3) < 1e-12 && std::abs(beats("1/16T")-beats("1/16")*2/3) < 1e-12);
+    CHECK(beats("1/8.") == beats("1/8")*1.5 && beats("1/4.") == beats("1/4")*1.5 && beats("1/16.") == beats("1/16")*1.5);
+    double v = -1;
+    for (uint32_t i = 0; i < syncCount; ++i) { char text[32]; formatValue(text, sizeof(text), DelaySync, i, 0); CHECK(!std::strcmp(text, syncNames[i]) && parseValue(DelaySync, text, 0, v) && v == i); }
+    CHECK(parseValue(DelaySync, "1/8", 0, v) && v == 6 && parseValue(DelaySync, "1/8.", 0, v) && v == 7 && parseValue(DelaySync, "1/8t", 0, v) && v == 5);
+    CHECK(parseValue(DelaySync, "free", 0, v) && v == 0 && parseValue(DelaySync, "OFF", 0, v) && v == 0);
+    CHECK(!parseValue(DelaySync, "1/3", 0, v) && !parseValue(DelaySync, "dotted", 0, v));
+    CHECK(std::strcmp(moduleOf(DelaySync), "Delay") == 0 && std::strcmp(moduleOf(AutoGain), "Master") == 0 && std::strcmp(moduleOf(blockParam(ReverbBlock, P2)), "Reverb") == 0);
+    CHECK(isSwitch(DelaySync) && paramInfo(DelaySync).stepped && paramInfo(DelaySync).max == 12);
 }
 
 void flavorsAreDescribed() {
@@ -133,6 +154,6 @@ void flavorsMeasureTheirOwnWay() {
 }
 
 int main() {
-    layoutIsStable(); infoIsConsistent(); sanitizeAndNormalize(); flavorsAreDescribed(); textRoundTrips(); textIsStrict(); flavorsMeasureTheirOwnWay();
+    layoutIsStable(); infoIsConsistent(); syncValues(); sanitizeAndNormalize(); flavorsAreDescribed(); textRoundTrips(); textIsStrict(); flavorsMeasureTheirOwnWay();
     std::cout << "Parameters: layout, ranges, text conversion in every flavor and strict parsing passed\n";
 }

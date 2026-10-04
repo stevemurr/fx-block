@@ -22,7 +22,13 @@ enum Global : uint32_t {
 enum BlockKey : uint32_t { On, Flavor, P1, P2, P3, BlockMix, BlockKeyCount };
 // Appended after the blocks so older sessions keep their IDs: matches the chain's loudness to the dry signal's.
 inline constexpr uint32_t AutoGain = GlobalCount+BlockCount*BlockKeyCount;
-inline constexpr uint32_t ParamCount = AutoGain+1;
+// And the delay's tempo sync, after that: Free (the Time knob rules) or a note value at the host's tempo.
+inline constexpr uint32_t DelaySync = AutoGain+1;
+inline constexpr uint32_t ParamCount = DelaySync+1;
+inline constexpr uint32_t syncCount = 13;
+inline constexpr std::array<const char*, syncCount> syncNames {"Free", "1/32", "1/16T", "1/16", "1/16.", "1/8T", "1/8", "1/8.", "1/4T", "1/4", "1/4.", "1/2", "1/1"};
+// Length of each in beats (a quarter note is one); T is a triplet, a dot makes it half again as long.
+inline constexpr std::array<double, syncCount> syncBeats {0, .125, 1./6, .25, .375, 1./3, .5, .75, 2./3, 1, 1.5, 2, 4};
 
 inline constexpr uint32_t blockParam(uint32_t block, BlockKey key) { return GlobalCount+block*BlockKeyCount+key; }
 inline constexpr bool isBlockParam(uint32_t id) { return id >= GlobalCount && id < AutoGain; }
@@ -101,6 +107,7 @@ inline constexpr ParamInfo paramInfo(uint32_t id) {
     if (id < GlobalCount) return globals[id];
     if (id >= ParamCount) return {"", "", 0, 0, 0};
     if (id == AutoGain) return {"Auto Gain", "", 0, 1, 0, true};
+    if (id == DelaySync) return {"Sync", "", 0, syncCount-1, 0, true};
     const uint32_t block = blockOf(id);
     switch (keyOf(id)) {
     case On: return {"On", "", 0, 1, 0, true};
@@ -116,7 +123,15 @@ inline constexpr bool paramUsed(uint32_t id) {
 // What a host sees: every parameter but the unused one, in id order.
 inline constexpr uint32_t exposedCount = ParamCount-1;
 inline constexpr uint32_t exposedId(uint32_t index) { return index < blockParam(WidthBlock, P3) ? index : index+1; }
-inline constexpr bool isSwitch(uint32_t id) { return id == Bypass || id == FilterOrder || id == AutoGain || (isBlockParam(id) && (keyOf(id) == On || keyOf(id) == Flavor)); }
+inline constexpr bool isSwitch(uint32_t id) { return id == Bypass || id == FilterOrder || id == AutoGain || id == DelaySync || (isBlockParam(id) && (keyOf(id) == On || keyOf(id) == Flavor)); }
+
+// The module a host files a parameter under (it is shown as "Module / Name").
+inline const char* moduleOf(uint32_t id) {
+    if (isBlockParam(id)) return blockNames[blockOf(id)];
+    if (id == FilterOrder) return blockNames[FilterBlock];
+    if (id == DelaySync) return blockNames[DelayBlock];
+    return "Master";
+}
 
 using Values = std::array<double, ParamCount>;
 inline Values defaults() noexcept {
@@ -170,6 +185,7 @@ inline int formatValue(char* out, size_t capacity, uint32_t id, double value, ui
     if (id == FilterOrder) return std::snprintf(out, capacity, "%s", value ? "After drive" : "Before drive");
     if (id == Input || id == Output) return std::snprintf(out, capacity, "%+.1f dB", value);
     if (id == Mix) return std::snprintf(out, capacity, "%.0f %%", value);
+    if (id == DelaySync) return std::snprintf(out, capacity, "%s", syncNames[static_cast<size_t>(value)]);
     const uint32_t block = blockOf(id);
     switch (keyOf(id)) {
     case On: return std::snprintf(out, capacity, "%s", value ? "On" : "Off");
@@ -221,11 +237,16 @@ inline bool parseValue(uint32_t id, const char* text, uint32_t flavor, double& o
     if (isSwitch(id)) {
         if (isBlockParam(id) && keyOf(id) == Flavor) {
             for (uint32_t f = 0; f < flavorCount; ++f) if (equal(flavorNames[blockOf(id)][f])) { out = f; return true; }
+        } else if (id == DelaySync) {
+            for (uint32_t i = 0; i < syncCount; ++i) if (equal(syncNames[i])) { out = i; return true; }
+            if (equal("off")) { out = 0; return true; }
         } else if (equal("on") || equal("after drive") || equal("after") || equal("post")) { out = 1; return true; }
         else if (equal("off") || equal("before drive") || equal("before") || equal("pre")) { out = 0; return true; }
         char* end = nullptr;
         const double v = std::strtod(text, &end);
         if (end == text) return false;
+        while (*end == ' ') ++end;
+        if (*end) return false;                                                  // "1/3" is not 1
         out = sanitize(id, v);
         return true;
     }
