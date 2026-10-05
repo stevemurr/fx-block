@@ -16,6 +16,6 @@ public:
     virtual void show(bool visible) = 0;
     virtual void* nativeView() const = 0;
     static Editor* create(EditorCallbacks callbacks);
-    static constexpr uint32_t width = 960, height = 720;
+    static constexpr uint32_t width = 1040, height = 650;
 };
 } // namespace fxblock

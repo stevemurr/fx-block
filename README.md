@@ -13,7 +13,7 @@ A swiss-army effects box, as a CLAP plugin for macOS: six blocks in a chain, **F
 
 ![The editor](docs/editor.png)
 
-Every block has an **On** switch, a **flavor** picker, three knobs that mean what the flavor says they mean (the panel relabels them, and the numbers are in real units: seconds, bits, milliseconds), and a **Mix**. Everything is off until you turn it on. Input, Output, a whole-chain Mix, Bypass and an **Auto Gain** that matches the loudness to the dry (so wet and dry compare at the same level) sit across the top, and the filter can sit before or after the drive.
+The six blocks run along the top as chips, in signal order. Each chip's light switches its block on and off; clicking its name shows that block's panel: a flavor picker, a graph drawn from the block's own DSP (the filter's measured response, the drive's transfer curve, the modulation sweep, the delay's repeats at the host's tempo, the reverb's decay, the width's image), and three knobs that mean what the flavor says they mean (the numbers are in real units: seconds, bits, milliseconds) plus a **Mix**. Everything is off until you turn it on. Input, Output, a whole-chain Mix, Bypass and an **Auto Gain** that matches the loudness to the dry (so wet and dry compare at the same level) sit across the top, and the filter's chip moves to after the drive's when you choose Drive → Filter.
 
 It adds no latency, runs at about 49× real time with every block on (48 kHz stereo, on the development machine), and the distortion is oversampled and anti-aliased. What it measures, and how, is in [docs/design.md](docs/design.md); what each knob does is in [docs/controls.md](docs/controls.md).
 
@@ -41,6 +41,7 @@ src/Parameters.h   the 42 parameters, flavor tables, real-unit mappings, text in
 src/Blocks.h       the six effects and the Stage that gives each the same on/off, flavor-change and mix behavior
 src/Filter.cpp … Width.cpp, Chain.cpp   the DSP
 src/Plugin.cpp     the CLAP plugin: ports, parameters, state, remote controls, GUI hooks
-src/Editor.mm      the Cocoa editor
+src/Editor.mm      the Cocoa editor: header, block chips, one panel per block
+src/ui/            its widgets (knob, toggle, picker, meter) and the six DSP-driven graphs
 tests/ tools/ docs/
 ```

@@ -27,7 +27,7 @@ set_target_properties(FxBlock PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden 
 if(APPLE)
   enable_language(OBJCXX)
   set(CMAKE_OBJCXX_STANDARD 17)
-  add_library(fxblock_editor STATIC src/Editor.mm)
+  add_library(fxblock_editor STATIC src/Editor.mm src/ui/Widgets.mm src/ui/Graphs.mm)
   target_compile_options(fxblock_editor PRIVATE -fobjc-arc)
   target_include_directories(fxblock_editor PUBLIC src)
   target_link_libraries(fxblock_editor PUBLIC fxblock_core "-framework AppKit" "-framework QuartzCore")

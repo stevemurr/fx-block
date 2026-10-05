@@ -45,15 +45,18 @@ void DriveFx::set(const BlockSettings& s, bool immediate) noexcept {
     if (immediate) { gain_ = gainGoal_; level_ = levelGoal_; tone_ = toneGoal_; bits_ = bitsGoal_; divisor_ = divisorGoal_; }
 }
 
+double DriveFx::inputGain(uint32_t flavor, double drive) noexcept {
+    drive = std::clamp(drive, 0., 100.);
+    return flavor == 0 ? dbToGain(drive*.46)               // 0 to 46 dB into the clipper
+         : flavor == 1 ? dbToGain(20+drive*.45)            // a fuzz is never clean: 20 to 65 dB
+         : 1.;
+}
+
 // What the three knobs ask for, in the units the signal path uses: the flavor decides what Drive and Tone mean.
 void DriveFx::retarget() noexcept {
     const double drive = std::clamp(target_.p1, 0., 100.), tone = std::clamp(target_.p2, 0., 100.);
     levelGoal_ = dbToGain(std::clamp(target_.p3, -24., 12.));
-    switch (flavor_) {
-    case 0: gainGoal_ = dbToGain(drive*.46); break;               // 0 to 46 dB into the clipper
-    case 1: gainGoal_ = dbToGain(20+drive*.45); break;            // a fuzz is never clean: 20 to 65 dB
-    default: break;
-    }
+    if (flavor_ < 2) gainGoal_ = inputGain(flavor_, drive);
     if (flavor_ < 2) levelGoal_ *= .8*compensation(gainGoal_);    // the more drive, the more it is pulled back (and the pre-emphasis's 2 dB taken off)
     toneGoal_ = lowpassCoefficient(700*std::pow(16000./700., tone*.01), rate_);
     bitsGoal_ = crushBits(drive);

@@ -29,12 +29,35 @@ void FilterFx::set(const BlockSettings& s, bool immediate) noexcept {
     if (immediate) reset();
 }
 
+// The two stages' Q for a resonance (0..1) and a slope blend (0 = 12 dB, 1 = 24 dB).
+void FilterFx::qs(double resonance, double slope, double& q1, double& q2) noexcept {
+    const double boost = std::pow(maxQ/butterworthQ, resonance);
+    q1 = butterworthQ*boost*(1-slope)+stageOneQ*slope;       // a 12 dB filter is one stage; 24 dB is two
+    q2 = stageTwoQ*boost;
+}
+
+double FilterFx::responseDb(uint32_t flavor, double cutoffHz, double resonance, bool slope24, double hz, double rate) noexcept {
+    // The trapezoidal state-variable filter is the analog one with frequency warped: x is hz relative to the cutoff,
+    // each in tan(pi f / rate).
+    const double fc = std::clamp(cutoffHz, 20., .49*rate), f = std::clamp(hz, 1., .499*rate);
+    const double x = std::tan(pi*f/rate)/std::tan(pi*fc/rate);
+    double q1, q2;
+    qs(std::clamp(resonance, 0., 1.), slope24 ? 1. : 0., q1, q2);
+    auto stage = [&](double q) {
+        const double denominator = std::sqrt((1-x*x)*(1-x*x)+(x/q)*(x/q));
+        const double numerator = flavor == 0 ? 1. : flavor == 1 ? x*x : x/q;           // lowpass, highpass, bandpass (unity at the center)
+        return numerator/denominator;
+    };
+    double magnitude = stage(q1);
+    if (slope24) magnitude *= stage(q2);
+    return 20*std::log10(std::max(magnitude, 1e-12));
+}
+
 // Cutoff, resonance and slope can all be moving; the coefficients are only recomputed when one is.
 void FilterFx::update() noexcept {
     const double fc = std::exp(logCutoff_);
-    const double boost = std::pow(maxQ/butterworthQ, resonanceNow_);
-    const double q1 = butterworthQ*boost*(1-slopeNow_)+stageOneQ*slopeNow_;   // a 12 dB filter is one stage; 24 dB is two
-    const double q2 = stageTwoQ*boost;
+    double q1, q2;
+    qs(resonanceNow_, slopeNow_, q1, q2);
     for (auto& channel : stage_) { channel[0].set(fc, q1, rate_); channel[1].set(fc, q2, rate_); }
     lastLog_ = logCutoff_; lastResonance_ = resonanceNow_; lastSlope_ = slopeNow_;
 }

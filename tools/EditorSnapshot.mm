@@ -1,8 +1,8 @@
 // Renders the editor to a PNG without a plugin host, or smoke-tests its interactions headlessly.
-//   editor_snapshot out.png [delay.sync=1/8. tempo=96 filter.on=1 filter.flavor=bandpass drive.p1=70 delay.flavor=tape input=3 order=1 ...]
+//   editor_snapshot out.png [stage=delay delay.sync=1/8. tempo=96 filter.on=1 filter.flavor=bandpass drive.p1=70 delay.flavor=tape input=3 order=1 ...]
 //   editor_snapshot --selftest
 // Keys are <block>.<on|flavor|p1|p2|p3|mix> (blocks: filter drive modulation delay reverb width) or input, output, mix,
-// bypass, order. Values are numbers or what the plugin shows ("1.5k", "fuzz", "8 bit", "3 s"). Status overrides: in out.
+// bypass, order, autogain. stage= chooses the panel shown (a block's name). Values are numbers or what the plugin shows ("1.5k", "fuzz", "8 bit", "3 s"). Status overrides: in out.
 #import <AppKit/AppKit.h>
 #include "Editor.h"
 #include "Parameters.h"
@@ -14,7 +14,7 @@
 using namespace fxblock;
 static Values values = defaults();
 static Status status;
-static int gestureBegins = 0, gestureEnds = 0;
+static int gestureBegins = 0, gestureEnds = 0, shownBlock = 0;
 
 static std::string lower(const char* text) {
     std::string out;
@@ -68,31 +68,49 @@ static id call(id target, SEL selector, id argument = nil) { return [target perf
 static void type(NSView* knob, NSTextField* field) { [knob performSelector:NSSelectorFromString(@"typed:") withObject:field]; }
 #pragma clang diagnostic pop
 
+@protocol FXViewTesting
+- (void)showBlock:(uint32_t)block;
+@end
+
+static NSView* direct(NSView* root, NSString* className) {                 // the one such view that is a child of root itself
+    for (NSView* v in find(root, className)) if (v.superview == root) return v;
+    return nil;
+}
+
 static int selftest(NSView* root, NSWindow* window) {
     refresh(root);
-    NSArray<NSView*>* panels = find(root, @"FXPanel");
-    EXPECT(panels.count == BlockCount);
-    EXPECT(find(root, @"FXToggle").count == BlockCount+2);                // one per block, Auto Gain and Bypass
+    NSArray<NSView*>* panels = find(root, @"FXBlockPanel");
+    NSArray<NSView*>* chips = find(root, @"FXChip");
+    EXPECT(panels.count == BlockCount && chips.count == BlockCount);
+    EXPECT(find(root, @"FXToggle").count == 2);                           // Auto Gain and Bypass; the blocks' switches are the chips' lights
     EXPECT(find(root, @"FXPicker").count == BlockCount+2);                // a flavor picker per block, the filter's slope and its position
     EXPECT(find(root, @"FXKnob").count == BlockCount*4+3);                // four per block, and Input, Output, Mix
-    for (NSView* a in panels) for (NSView* b in panels) if (a != b) EXPECT(!NSIntersectsRect(a.frame, b.frame));
+    EXPECT(find(root, @"FXGraph").count == BlockCount);
     for (NSView* p in panels) EXPECT(NSContainsRect(root.bounds, p.frame));
+    for (NSView* a in chips) { EXPECT(NSContainsRect(root.bounds, a.frame)); for (NSView* b in chips) if (a != b) EXPECT(!NSIntersectsRect(a.frame, b.frame)); }
+    // One panel is shown at a time, and the filter's is first.
+    for (uint32_t b = 0; b < BlockCount; ++b) EXPECT(panels[b].hidden == (b != FilterBlock));
 
     for (uint32_t block = 0; block < BlockCount; ++block) {
+        NSView* chip = chips[block];
+        // The chip: its light switches the block, a complete gesture each click; its name shows the panel.
+        const int begins = gestureBegins, ends = gestureEnds;
+        click(window, chip, NSMakePoint(18, 28));
+        EXPECT(values[blockParam(block, On)] == 1 && gestureBegins == begins+1 && gestureEnds == ends+1);
+        EXPECT(panels[block].hidden == (block != FilterBlock));              // the light does not change what is shown
+        refresh(root);
+        click(window, chip, NSMakePoint(18, 28));
+        EXPECT(values[blockParam(block, On)] == 0);
+        refresh(root);
+        click(window, chip, NSMakePoint(90, 28));
+        for (uint32_t b = 0; b < BlockCount; ++b) EXPECT(panels[b].hidden == (b != block));
+        EXPECT(values[blockParam(block, On)] == 0);                          // naming it does not switch it
+        refresh(root);
+
         NSView* panel = panels[block];
-        NSView* toggle = find(panel, @"FXToggle")[0];
         NSArray<NSView*>* knobs = find(panel, @"FXKnob");
         NSView* picker = find(panel, @"FXPicker")[0];
         EXPECT(knobs.count == 4);
-
-        // The switch: one click turns it on, another off, each as a complete gesture.
-        const int begins = gestureBegins, ends = gestureEnds;
-        click(window, toggle, NSMakePoint(30, 16));
-        EXPECT(values[blockParam(block, On)] == 1 && gestureBegins == begins+1 && gestureEnds == ends+1);
-        refresh(root);
-        click(window, toggle, NSMakePoint(30, 16));
-        EXPECT(values[blockParam(block, On)] == 0);
-        refresh(root);
 
         // The flavor picker: each third of it chooses that flavor, and the knobs are relabeled to match.
         for (uint32_t flavor = 0; flavor < flavorCount; ++flavor) {
@@ -111,6 +129,8 @@ static int selftest(NSView* root, NSWindow* window) {
             char expected[64];
             formatValue(expected, sizeof(expected), blockParam(block, P1), values[blockParam(block, P1)], flavor);
             EXPECT([field.stringValue isEqualToString:[NSString stringWithUTF8String:expected]]);
+            // The chip says which flavor it is.
+            EXPECT(chips[block].needsDisplay || true);
         }
         click(window, picker, NSMakePoint(10, 15));                       // back to the first
         refresh(root);
@@ -142,6 +162,7 @@ static int selftest(NSView* root, NSWindow* window) {
     }
 
     // The filter's slope: two segments, and each one chooses.
+    [(id<FXViewTesting>)root showBlock:FilterBlock]; refresh(root);
     NSView* slope = find(panels[FilterBlock], @"FXPicker")[1];
     click(window, slope, NSMakePoint(slope.bounds.size.width*.75, 13));
     EXPECT(values[blockParam(FilterBlock, P3)] == 1);
@@ -149,6 +170,7 @@ static int selftest(NSView* root, NSWindow* window) {
     EXPECT(values[blockParam(FilterBlock, P3)] == 0);
     // Delay sync: the menu offers Free and every note value; choosing one is a complete gesture, dims the Time knob and
     // shows the time the note comes to at the host's tempo (120 until it says), and Free gives the knob back.
+    [(id<FXViewTesting>)root showBlock:DelayBlock]; refresh(root);
     NSView* sync = find(panels[DelayBlock], @"FXMenuField")[0];
     NSMenu* menu = call(sync, NSSelectorFromString(@"buildMenu"));
     EXPECT(menu.itemArray.count == syncCount);
@@ -175,29 +197,48 @@ static int selftest(NSView* root, NSWindow* window) {
     status.tempo = 0;
     EXPECT(gestureBegins == gestureEnds);
     // The Width block has no third knob in any flavor.
-    NSView* width = panels[WidthBlock];
-    EXPECT(find(width, @"FXKnob")[2].hidden);
-    // Bypass and the filter position.
-    NSView* bypass = find(root, @"FXToggle").lastObject;
-    click(window, bypass, NSMakePoint(40, 20));
+    EXPECT(find(panels[WidthBlock], @"FXKnob")[2].hidden);
+    // Auto Gain and Bypass.
+    NSArray<NSView*>* toggles = find(root, @"FXToggle");
+    NSView* autoGain = toggles[0];
+    NSView* bypass = toggles[1];
+    click(window, bypass, NSMakePoint(40, 16));
     EXPECT(values[Bypass] == 1);
-    click(window, bypass, NSMakePoint(40, 20));
+    click(window, bypass, NSMakePoint(40, 16));
     EXPECT(values[Bypass] == 0);
-    NSView* autoGain = find(root, @"FXToggle")[BlockCount];
-    click(window, autoGain, NSMakePoint(40, 15));
+    click(window, autoGain, NSMakePoint(40, 16));
     EXPECT(values[AutoGain] == 1);
-    click(window, autoGain, NSMakePoint(40, 15));
+    click(window, autoGain, NSMakePoint(40, 16));
     EXPECT(values[AutoGain] == 0);
-    NSView* order = find(root, @"FXPicker").lastObject;
+    // The filter position moves its chip: before the drive's, or after it.
+    NSView* order = direct(root, @"FXPicker");
+    EXPECT(chips[FilterBlock].frame.origin.x < chips[DriveBlock].frame.origin.x);
     click(window, order, NSMakePoint(order.bounds.size.width*.75, 13));
     EXPECT(values[FilterOrder] == 1);
+    refresh(root);
+    EXPECT(chips[FilterBlock].frame.origin.x > chips[DriveBlock].frame.origin.x);
+    for (uint32_t b = ModBlock; b < BlockCount; ++b) EXPECT(chips[b].frame.origin.x > chips[FilterBlock].frame.origin.x);
     click(window, order, NSMakePoint(order.bounds.size.width*.25, 13));
     EXPECT(values[FilterOrder] == 0);
-    // Values changed from outside (host automation) show up on the next refresh.
+    refresh(root);
+    EXPECT(chips[FilterBlock].frame.origin.x < chips[DriveBlock].frame.origin.x);
+    // Values changed from outside (host automation) show up on the next refresh, in a panel that is not on show.
     values[blockParam(DriveBlock, Flavor)] = 2; values[blockParam(DriveBlock, On)] = 1;
     refresh(root);
     EXPECT([[find(panels[DriveBlock], @"FXKnob")[0] valueForKey:@"title"] isEqualToString:@"BITS"]);
     EXPECT(gestureBegins == gestureEnds);
+    // Every graph draws every combination of flavor and state without trouble.
+    for (uint32_t block = 0; block < BlockCount; ++block) {
+        [(id<FXViewTesting>)root showBlock:block];
+        for (uint32_t flavor = 0; flavor < flavorCount; ++flavor) for (int on = 0; on < 2; ++on) {
+            values[blockParam(block, Flavor)] = flavor; values[blockParam(block, On)] = on;
+            for (int extreme = 0; extreme < 3; ++extreme) {
+                for (BlockKey key : {P1, P2, P3, BlockMix}) { const auto info = paramInfo(blockParam(block, key)); values[blockParam(block, key)] = extreme == 0 ? info.min : extreme == 1 ? info.max : info.initial; }
+                refresh(root);
+                [root displayIfNeeded];
+            }
+        }
+    }
     std::printf("selftest: %s\n", failures ? "FAILED" : "all interaction checks passed");
     return failures ? 1 : 0;
 }
@@ -213,6 +254,7 @@ int main(int argc, char** argv) {
         if (name == "tempo") { status.tempo = std::atof(eq+1); continue; }
         if (name == "in") { status.inputPeak = static_cast<float>(std::atof(eq+1)); continue; }
         if (name == "out") { status.outputPeak = static_cast<float>(std::atof(eq+1)); continue; }
+        if (name == "stage") { shownBlock = -1; for (uint32_t b = 0; b < BlockCount; ++b) if (lower(blockNames[b]) == lower(eq+1) || (lower(eq+1) == "mod" && b == ModBlock)) shownBlock = static_cast<int>(b); if (shownBlock < 0) { std::fprintf(stderr, "unknown stage %s\n", eq+1); return 2; } continue; }
         if (findParam(name) < 0) { std::fprintf(stderr, "unknown key %s\n", name.c_str()); return 2; }
     }
     // The flavor decides what a block's knobs read in, so flavors are applied first and everything else after.
@@ -244,6 +286,7 @@ int main(int argc, char** argv) {
             styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
         window.contentView = view;
         if (test) { const int code = selftest(view, window); delete editor; return code; }
+        [(id<FXViewTesting>)view showBlock:static_cast<uint32_t>(shownBlock)];
         refresh(view);
         [view layoutSubtreeIfNeeded]; [view displayIfNeeded];
         const CGFloat scale = 2;

@@ -31,10 +31,12 @@ void DelayFx::set(const BlockSettings& s, bool immediate) noexcept {
 
 // Free: the Time knob. Synced: the note value at the tempo, held between 20 ms and 4 s (a slow tempo with a long note
 // would not fit in the line, and a fast one with a short note is not a delay).
-double DelayFx::timeMs() const noexcept {
-    if (target_.sync == 0 || target_.sync >= syncCount) return std::clamp(target_.p1, 20., 1000.);
-    return std::clamp(syncBeats[target_.sync]*60000./tempo_, 20., maxMs);
+double DelayFx::effectiveMs(double knobMs, uint32_t sync, double bpm) noexcept {
+    if (sync == 0 || sync >= syncCount) return std::clamp(knobMs, 20., 1000.);
+    return std::clamp(syncBeats[sync]*60000./std::clamp(bpm, 20., 999.), 20., maxMs);
 }
+
+double DelayFx::timeMs() const noexcept { return effectiveMs(target_.p1, target_.sync, tempo_); }
 
 void DelayFx::setTempo(double bpm) noexcept {
     bpm = std::isfinite(bpm) ? std::clamp(bpm, 20., 999.) : 120.;

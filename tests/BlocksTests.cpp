@@ -52,6 +52,40 @@ void filterMovesSmoothly() {
     CHECK(worst < .3*2*pi*150/48000*3);
 }
 
+// The response the editor draws is the response the filter makes: computed (FilterFx::responseDb) against measured through
+// the chain, every flavor, both slopes, three resonances.
+void filterResponseIsWhatTheFilterDoes() {
+    double worst = 0; int compared = 0;
+    for (uint32_t flavor = 0; flavor < 3; ++flavor) for (uint32_t slope : {0u, 1u}) for (double resonance : {0., 50., 100.}) for (double cutoff : {400., 2500.}) {
+        const auto v = oneBlock(FilterBlock, flavor, cutoff, resonance, slope, 100);
+        for (double hz : {60., 200., 400., 800., 1500., 2500., 4000., 9000., 15000.}) {
+            const double computed = FilterFx::responseDb(flavor, cutoff, resonance*.01, slope == 1, hz, 48000);
+            if (computed < -60) continue;                                    // below what a 0.1-amplitude sine measures cleanly
+            const double heard = gainDb(v, hz);
+            worst = std::max(worst, std::abs(heard-computed)); ++compared;
+            CHECK(std::abs(heard-computed) < .2);
+        }
+    }
+    std::printf("filter response: %d points, computed against measured, worst difference %.3f dB\n", compared, worst);
+    CHECK(compared > 200);
+    // The peak at the cutoff, as before: 18.1 dB at full resonance on the 12 dB slope.
+    CHECK(std::abs(FilterFx::responseDb(0, 2000, 1., false, 2000, 48000)-18.1) < .4);
+}
+
+// What the editor reads from the drive and the modulation.
+void graphStatics() {
+    CHECK(DriveFx::inputGain(0, 0) == 1 && std::abs(db(DriveFx::inputGain(0, 100))-46) < 1e-9 && std::abs(db(DriveFx::inputGain(1, 0))-20) < 1e-9);
+    CHECK(std::abs(db(DriveFx::inputGain(1, 100))-65) < 1e-9 && DriveFx::inputGain(2, 80) == 1);
+    CHECK(std::abs(DriveFx::clip(0, 0)) < 1e-12 && std::abs(DriveFx::clip(0, 50)-(1-std::tanh(.12))) < 1e-9 && std::abs(DriveFx::clip(0, -50)+(1+std::tanh(.12))) < 1e-9);   // soft, and lopsided on purpose
+    CHECK(DriveFx::clip(1, 5) == 1. && DriveFx::clip(1, -5) == -.8);                                                    // fuzz stops at +1 and -0.8
+    // Chorus taps sit at 10 and 15 ms, a flanger at 1.5 ms, a phaser at 1 kHz, when there is no depth or the LFO is at zero.
+    CHECK(ModulationFx::sweep(0, 1, 0, 0) == 10 && std::abs(ModulationFx::sweep(0, 1, 0, 1)-15) < 1e-9 && ModulationFx::sweep(0, 0, .3, 0) == 10);
+    CHECK(ModulationFx::sweep(1, 0, .3) == 1.5 && ModulationFx::sweep(2, 0, .3) == 1000);
+    // At full depth and the top of the cycle: chorus +/-6 ms, flanger 1.5 * 2^2.75 = 10.1 ms, phaser two octaves up.
+    CHECK(std::abs(ModulationFx::sweep(0, 1, .25, 0)-16) < 1e-9 && std::abs(ModulationFx::sweep(1, 1, .25)-1.5*std::exp2(2.75)) < 1e-9);
+    CHECK(std::abs(ModulationFx::sweep(2, 1, .25)-4000) < 1e-6 && std::abs(ModulationFx::sweep(2, 1, .75)-250) < 1e-6);
+}
+
 // ---------------------------------------------------------------- oversampler
 void oversamplerIsClean() {
     const double rate = 48000;
@@ -390,7 +424,7 @@ void stageIsSmooth() {
 }
 
 int main() {
-    filterFlavorsAndSlopes(); filterResonanceAndStability(); filterMovesSmoothly();
+    filterFlavorsAndSlopes(); filterResonanceAndStability(); filterMovesSmoothly(); filterResponseIsWhatTheFilterDoes(); graphStatics();
     oversamplerIsClean(); driveAddsHarmonicsAndKeepsLevel(); driveDoesNotAlias(); crushQuantizesAndHolds();
     modulationMoves(); delayRepeats(); reverbDecaysAsNamed(); reverbDampingDarkensTheTail(); widthFlavors(); stageIsSmooth();
     std::cout << "Blocks: filter, oversampler, drive, modulation, delay, reverb, width and stage switching passed\n";

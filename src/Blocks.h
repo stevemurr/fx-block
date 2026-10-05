@@ -28,7 +28,11 @@ public:
     void setFlavor(uint32_t) noexcept {}
     Stereo process(Stereo in) noexcept;
     size_t tailSamples() const noexcept { return 0; }
+    // The magnitude in dB the filter makes at `hz` for these settings (resonance 0..1, slope24 for 24 dB/octave), computed
+    // from the same Q mapping and the trapezoidal filter's own frequency warping: what the editor's graph draws.
+    static double responseDb(uint32_t flavor, double cutoffHz, double resonance, bool slope24, double hz, double rate) noexcept;
 private:
+    static void qs(double resonance, double slope, double& q1, double& q2) noexcept;
     void update() noexcept;
     double rate_ = 48000, smooth_ = .001, morph_ = .002;
     double resonance_ = .25, slope_ = 0;                                  // targets
@@ -49,9 +53,10 @@ public:
     void setFlavor(uint32_t flavor) noexcept { flavor_ = flavor; retarget(); reset(); }
     Stereo process(Stereo in) noexcept;
     size_t tailSamples() const noexcept { return 0; }
+    static double clip(uint32_t flavor, double v) noexcept;                    // the curve (overdrive, fuzz)
+    static double inputGain(uint32_t flavor, double drivePercent) noexcept;    // the gain into it, for 0..100% Drive
 private:
     void retarget() noexcept;
-    static double clip(uint32_t flavor, double v) noexcept;                    // the curve
     static double antiderivative(uint32_t flavor, double v) noexcept;          // its integral, for anti-aliasing
     double clipSmooth(size_t channel, double v) noexcept;                      // the curve with first-order antiderivative anti-aliasing
     double compensation(double gain) const noexcept;
@@ -81,6 +86,9 @@ public:
     void setFlavor(uint32_t flavor) noexcept { flavor_ = flavor; clearState(); }
     Stereo process(Stereo in) noexcept;
     size_t tailSamples() const noexcept;
+    // Where the modulation is at a point in its cycle (phase 0..1, depth 0..1): the delay in ms for a chorus (tap 0 or 1)
+    // and a flanger, the center frequency in Hz for a phaser. The DSP and the editor's graph both use this.
+    static double sweep(uint32_t flavor, double depth, double phase, int tap = 0) noexcept;
 private:
     void clearState() noexcept;
     static constexpr int stages = 6;
@@ -106,6 +114,8 @@ public:
     Stereo process(Stereo in) noexcept;
     size_t tailSamples() const noexcept;
     static constexpr double maxMs = 4000;
+    // The delay time for a Time knob, a Sync choice (0 is Free) and a tempo: what the DSP uses and the editor shows.
+    static double effectiveMs(double knobMs, uint32_t sync, double bpm) noexcept;
 private:
     void clearState() noexcept;
     void retarget() noexcept;

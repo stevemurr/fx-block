@@ -22,6 +22,13 @@ size_t ModulationFx::tailSamples() const noexcept {
     return static_cast<size_t>((flavor_ == 0 ? .05 : .15+.85*fb)*rate_);
 }
 
+double ModulationFx::sweep(uint32_t flavor, double depth, double phase, int tap) noexcept {
+    depth = std::clamp(depth, 0., 1.);
+    if (flavor == 0) return (tap ? 15. : 10.)+depth*6.*std::sin(2*pi*(phase+(tap ? .5 : 0.)));      // two taps around 10 and 15 ms, up to +/-6 ms
+    if (flavor == 1) return 1.5*std::exp2(std::sin(2*pi*phase)*.5*5.5*depth);                       // exponentially around 1.5 ms (0.2 to 10 ms)
+    return 1000.*std::exp2(std::sin(2*pi*phase)*.5*4.*depth);                                       // +/-2 octaves around 1 kHz
+}
+
 Stereo ModulationFx::process(Stereo in) noexcept {
     lfo_ += std::clamp(target_.p1, .05, 10.)/rate_;
     lfo_ -= std::floor(lfo_);
@@ -37,17 +44,17 @@ Stereo ModulationFx::process(Stereo in) noexcept {
             line_[c].push(input[c]+.4f*fb*feedback_[c]);
             wet = 0;
             for (int t = 0; t < 2; ++t) {
-                const double ms = (t ? 15. : 10.)+depth*6.*std::sin(2*pi*(phase+(t ? .5 : 0.)));
+                const double ms = sweep(0, depth, phase, t);
                 wet += .5f*line_[c].read(ms*rate_/1000.);
             }
         } else if (flavor_ == 1) {
             // Flanger: one short tap sweeping exponentially, up to +/-2.75 octaves around 1.5 ms (0.2 to 10 ms).
-            const double ms = 1.5*std::exp2(std::sin(2*pi*phase)*.5*5.5*depth);
+            const double ms = sweep(1, depth, phase);
             line_[c].push(tiny(input[c]+.88f*fb*feedback_[c]));
             wet = line_[c].read(ms*rate_/1000.);
         } else {
             // Phaser: six first-order allpass stages swept together, +/-2 octaves around 1 kHz at full depth.
-            const double f = 1000.*std::exp2(std::sin(2*pi*phase)*.5*4.*depth);
+            const double f = sweep(2, depth, phase);
             const double t = std::tan(pi*std::min(f, .45*rate_)/rate_);
             const float a = static_cast<float>((t-1)/(t+1));
             float u = input[c]+.8f*fb*feedback_[c];
